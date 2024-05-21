@@ -25,7 +25,7 @@ This is hilariously insecure, but your device is already hilariously insecure so
 
 ## Disclaimer
 
->[!CAUTION] Disclaimer
+>[!CAUTION]
 > Use this tool at your own peril. It's modifying the actual device software. 
 > 
 > I am not responsible for:
