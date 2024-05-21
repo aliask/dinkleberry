@@ -107,7 +107,7 @@ class Dinkleberry:
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="dlink-autopatch")
+    parser = argparse.ArgumentParser(prog="dinkleberry")
     parser.add_argument("target", type=str, help="Target NAS to patch")
     parser.add_argument(
         "--telnet", action="store_true", default=False, help="Start telnet server"
