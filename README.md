@@ -10,12 +10,30 @@ Dinkleberry will execute a command to swap out the vulnerable `nas_sharing.cgi` 
 
 The `/usr/local/modules` folder (where the file lives) is read-only, so instead a copy is created in `/usr/local/config`, and the symlink in `/var/www/cgi-bin` is updated to point to the safe(r) version.
 
+>[!NOTE]
+> The filesystem is re-loaded from flash on boot. Applying this patch will only work until you reboot the device.
+> If you want a more permanent fix, you'll have to re-flash the firmware.
+>
+> I leave this as an exercise for the reader ;)
+
 ## Usage
 
+```console
+aliask:~/git/dinkleberry$ python3 ./src/main.py -h                                                                                                                   10:01:02
+usage: dinkleberry [-h] [--telnet] [--kill-telnet] [--test] [--verbose] target
+
+positional arguments:
+  target         Target NAS to patch
+
+options:
+  -h, --help     show this help message and exit
+  --telnet       Start telnet server
+  --kill-telnet  Stop telnet server
+  --test         Test if device is vulnerable
+  --verbose, -v  Set this to print debug messages
 ```
-usage: dinkleberry [-h] [--telnet] [--kill-telnet] target
-dinkleberry: error: the following arguments are required: target
-```
+
+If no optional flags are applied, the script performs the patching.
 
 ### Telnet
 
