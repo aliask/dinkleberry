@@ -59,7 +59,7 @@ void run_system(void) {
     // OK, definitely authenticated! SAFE!
     b64_decode(s_system, s_system_b64, strlen(s_system_b64));
     fix_path_special_char(s_system); // NO NASTY CHARACTERS! OK, well some are allowed.
-    system(s_system);
+    system(s_system); // This call is the target of our patching - replace with NOPs
     print_nas_sharing_config_auth();
   }
   return;

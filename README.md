@@ -1,14 +1,18 @@
-# Dinkleberry
+# Dinkleberry 🫐
 
-Are you stuck with a D-Link NAS vulnerable to CVE-2024-3272, and no patch in sight?
+Are you one of the 92,000+ people<sup>1</sup> stuck with a D-Link NAS vulnerable to CVE-2024-3272, and no patch in sight?
 
 This tool uses the exploit itself to patch a vulnerable device.
 
+<sup>1</sup>: See original disclosure in refs
+
 ## What it does
 
-Dinkleberry will execute a command to swap out the vulnerable `nas_sharing.cgi` file with a patched version - overwriting the `system()` call with `nop`s.
+Dinkleberry will execute a command to swap out the vulnerable `nas_sharing.cgi` file with a patched version - overwriting the `system()` call with [NOP](https://en.wikipedia.org/wiki/NOP_(code))s.
 
 The `/usr/local/modules` folder (where the file lives) is read-only, so instead a copy is created in `/usr/local/config`, and the symlink in `/var/www/cgi-bin` is updated to point to the safe(r) version.
+
+I have chosen to only NOP the system call so that the command still responds as usual, just without actually executing anything.
 
 >[!NOTE]
 > The filesystem is re-loaded from flash on boot. Applying this patch will only work until you reboot the device.
@@ -59,6 +63,9 @@ During [analysis](./docs/decompiled-funcs.md) of the `nas_sharing.cgi` and `libs
 There are like 80 calls to `system()` in `nas_sharing.cgi` alone - many of these have a pathway for user input. I haven't bothered analysing them all to look for more holes to patch, but here's one S-tier example:
 
 ```c
+/*  Why use system() instead of libc fopen/fwrite?
+    What if you want to write a long string or your filename is long?
+    Painfully obvious command injection playground 🤦 */
 void append_to_file(const char* string, const char* file) {
   char s_cmd[1024];
   sprintf(s_cmd, "echo %s >> %s", string, file);
