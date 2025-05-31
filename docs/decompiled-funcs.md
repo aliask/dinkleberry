@@ -115,3 +115,219 @@ void fix_path_special_char(char *cmd) {
   return;
 }
 ```
+
+## `libsafe_system.cgi`
+
+Library containing a "safe" system execution wrapper and a "safe" command execution wrapper.
+
+Safe from a memory corruption vulnerability perspective, but not from a code execution vulnerability perspective.
+
+This library is used by the following URLs:
+- `/cgi-bin/nas_sharing.cgi` - 200
+- `/cgi-bin/network_mgr.cgi` - 404
+- `/cgi-bin/addon_center.cgi` - 404
+- `/cgi-bin/account_mgr.cgi` via the following commands (all authenticated):
+    - cgi_create_import_users
+    - cgi_user_batch_create
+    - cgi_group_add
+    - cgi_user_add
+    - cgi_group_del
+    - cgi_group_modify
+    - cgi_user_modify
+    - cgi_user_modify
+    - cgi_chg_admin_pw_mdb
+    - cgi_chg_admin_pw
+    - cgi_user_del
+    - cgi_get_modify_group_info
+    - cgi_get_modify_user_info
+- `/cgi-bin/webdav_mgr.cgi` - 404
+- `/cgi-bin/usb_device.cgi` - 404
+- `/cgi-bin/gui_mgr.cgi` - 404
+- `/cgi-bin/mydlink.cgi` - 200
+    - cmd=123, user=messagebus, pwd='', volume param is passed to `scandisk`
+- `/cgi-bin/wizard_mgr.cgi` - 404
+- `/cgi-bin/mydlink_account_mgr.cgi` - 404
+- `/cgi-bin/myMusic.cgi` - 404
+- `/cgi-bin/system_mgr.cgi` - 404
+- `/cgi-bin/photocenter_mgr.cgi` - 404
+- `/cgi-bin/login_mgr.cgi` - 500
+- `/cgi-bin/webfile_mgr.cgi` - 404
+- `/cgi-bin/mydlink_sync_mgr.cgi` - 200
+
+
+### `safe_system()`
+
+```c
+// Safe system execution wrapper
+int safe_system(char* command, char* stdout_file, char* stderr_file, char** args) {
+    // Allocate initial array for command and arguments (128 * 4 bytes)
+    char** cmd_args = (char**)calloc(128, sizeof(char*));
+    if (cmd_args == NULL) {
+        return -1;
+    }
+
+    // Store the command as first argument
+    cmd_args[0] = command;
+
+    // Copy additional arguments if provided
+    if (args != NULL) {
+        int arg_count = 1;
+        int current_size = 128;
+        size_t total_size = 520; // 0x208 initial size
+
+        // Copy all arguments
+        while (*args != NULL) {
+            cmd_args[arg_count] = *args;
+            args++;
+            arg_count++;
+
+            // Reallocate if we need more space
+            if (arg_count >= current_size) {
+                cmd_args = (char**)realloc(cmd_args, total_size);
+                if (cmd_args == NULL) {
+                    return -1;
+                }
+                // Clear new memory
+                memset(&cmd_args[arg_count], 0, 512);
+                current_size += 128;
+            }
+            total_size += sizeof(char*);
+        }
+    }
+
+    // Execute command safely
+    int result = safe_exec(cmd_args[0], cmd_args, stdout_file, stderr_file, 1);
+    free(cmd_args);
+    return result;
+}
+```
+
+### `safe_exec()`
+
+```c
+// Safe command execution with proper signal handling
+int safe_exec(char* command, char** args, char* stdout_file, char* stderr_file, int wait_flag) {
+    // If no command provided, check if /bin/sh is executable
+    if (command == NULL) {
+        uint access_result = access("/bin/sh", X_OK);
+        return (access_result < 2) ? (1 - access_result) : 0;
+    }
+
+    // Set up signal handlers
+    struct sigaction sig_int, sig_quit, sig_chld;
+    struct sigaction old_int, old_quit, old_chld;
+    sigset_t sig_mask, old_mask;
+
+    // Setup SIGINT handler
+    sig_int.__sigaction_handler.sa_handler = SIG_IGN;
+    sigemptyset(&sig_int.sa_mask);
+    sig_int.sa_flags = 0;
+
+    // Install signal handlers
+    if (sigaction(SIGINT, &sig_int, &old_int) == -1) {
+        return -1;
+    }
+    if (sigaction(SIGQUIT, &sig_int, &old_quit) == -1) {
+        sigaction(SIGINT, &old_int, NULL);
+        return -1;
+    }
+
+    // Setup SIGCHLD handler if not waiting
+    if (!wait_flag) {
+        sig_chld.__sigaction_handler.sa_handler = SIG_IGN;
+        sigemptyset(&sig_chld.sa_mask);
+        sig_chld.sa_flags = 0;
+        if (sigaction(SIGCHLD, &sig_chld, &old_chld) == -1) {
+            sigaction(SIGINT, &old_int, NULL);
+            sigaction(SIGQUIT, &old_quit, NULL);
+            return -1;
+        }
+    }
+
+    // Block SIGCHLD
+    sigemptyset(&sig_mask);
+    sigaddset(&sig_mask, SIGCHLD);
+    if (sigprocmask(SIG_BLOCK, &sig_mask, &old_mask) == -1) {
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGQUIT, &old_quit, NULL);
+        if (!wait_flag) {
+            sigaction(SIGCHLD, &old_chld, NULL);
+        }
+        return -1;
+    }
+
+    // Fork process
+    pid_t pid = fork();
+    if (pid == -1) {
+        // Fork failed, restore signals and return
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGQUIT, &old_quit, NULL);
+        if (!wait_flag) {
+            sigaction(SIGCHLD, &old_chld, NULL);
+        }
+        sigprocmask(SIG_SETMASK, &old_mask, NULL);
+        return -1;
+    }
+
+    if (pid == 0) {  // Child process
+        // Restore original signal handlers
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGQUIT, &old_quit, NULL);
+        if (!wait_flag) {
+            sigaction(SIGCHLD, &old_chld, NULL);
+        }
+        sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+        // Setup stdout redirection if requested
+        if (stdout_file != NULL) {
+            int fd = creat(stdout_file, 0644);  // 0x1a4 = 0644
+            if (fd == -1) {
+                return -1;
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+
+        // Setup stderr redirection if requested
+        if (stderr_file != NULL) {
+            int fd = creat(stderr_file, 0644);
+            if (fd == -1) {
+                return -1;
+            }
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+
+        // Set secure PATH environment variable
+        putenv("PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin");
+        
+        // Execute command
+        execvp(command, args);
+        _exit(127);  // Command not found
+    }
+
+    // Parent process
+    if (!wait_flag) {
+        // Don't wait for child
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGQUIT, &old_quit, NULL);
+        sigprocmask(SIG_SETMASK, &old_mask, NULL);
+        return 0;
+    }
+
+    // Wait for child process
+    int status = -1;
+    while (1) {
+        pid_t result = waitpid(pid, &status, 0);
+        if (result != -1) break;
+        if (errno != EINTR) break;
+    }
+
+    // Restore signal handlers
+    sigaction(SIGINT, &old_int, NULL);
+    sigaction(SIGQUIT, &old_quit, NULL);
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+    return status;
+}
+```

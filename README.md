@@ -16,9 +16,7 @@ I have chosen to only NOP the system call so that the command still responds as 
 
 >[!NOTE]
 > The filesystem is re-loaded from flash on boot. Applying this patch will only work until you reboot the device.
-> If you want a more permanent fix, you'll have to re-flash the firmware.
->
-> I leave this as an exercise for the reader ;)
+> If you want a more permanent fix, you'll have to re-flash the firmware - perhaps with [Debian](https://github.com/ggirou/dns320)
 
 ## Usage
 
